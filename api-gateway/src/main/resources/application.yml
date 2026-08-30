@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+
+            - id: order-service
+              uri: http://order-service:8080
+              predicates:
+                - Path=/api/orders/**
+
+            - id: inventory-service
+              uri: http://inventory-service:8080
+              predicates:
+                - Path=/api/inventory/**
+
+            - id: payment-service
+              uri: http://payment-service:8080
+              predicates:
+                - Path=/api/payments/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

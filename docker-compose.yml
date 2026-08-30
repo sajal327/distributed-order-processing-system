@@ -1,0 +1,94 @@
+services:
+  mysql:
+    container_name: mysql
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-orders}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+    ports: ["3306:3306"]
+    volumes: ["mysql-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-app}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-change-me}
+    ports: ["5672:5672", "15672:15672"]
+    volumes: ["rabbitmq-data:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  order-service:
+    container_name: order-service
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    depends_on:
+      mysql: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-orders}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-app}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-app}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-change-me}
+
+  inventory-service:
+    container_name: inventory-service
+    build:
+      context: .
+      dockerfile: inventory-service/Dockerfile
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-orders}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-app}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-app}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-change-me}
+
+  payment-service:
+    container_name: payment-service
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    depends_on:
+      mysql: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+
+  notification-service:
+    container_name: notification-service
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    depends_on:
+      mysql: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+
+  api-gateway:
+    container_name: api-gateway
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    depends_on:
+      order-service: {condition: service_started}
+    ports:
+      - "8080:8080"
+
+volumes:
+  mysql-data:
+  rabbitmq-data:
