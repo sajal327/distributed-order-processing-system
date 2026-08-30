@@ -15,7 +15,8 @@ COPY inventory-service/src ./inventory-service/src
 RUN mvn -q -pl inventory-service -am -DskipTests package
 
 
-FROM eclipse-temurin:21-jre
+#FROM eclipse-temurin:21-jre-alpine
+FROM gcr.io/distroless/java21-debian12:nonroot
 
 WORKDIR /app
 

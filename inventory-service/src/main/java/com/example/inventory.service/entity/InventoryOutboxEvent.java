@@ -43,6 +43,12 @@ public class InventoryOutboxEvent {
     @Column(name = "aggregate_id", nullable = false)
     private Long aggregateId;
 
+    @Column(
+            name = "correlation_id",
+            length = 255
+    )
+    private String correlationId;
+
     @Column(name = "event_type", nullable = false, length = 150)
     private String eventType;
 
@@ -91,6 +97,7 @@ public class InventoryOutboxEvent {
             Long eventId,
             String aggregateType,
             Long aggregateId,
+            String correlationId,
             String eventType,
             String routingKey,
             String payload
@@ -98,6 +105,7 @@ public class InventoryOutboxEvent {
         this.eventId = eventId;
         this.aggregateType = aggregateType;
         this.aggregateId = aggregateId;
+        this.correlationId = correlationId;
         this.eventType = eventType;
         this.routingKey = routingKey;
         this.payload = payload;
@@ -115,6 +123,10 @@ public class InventoryOutboxEvent {
 
     public Long getAggregateId() {
         return aggregateId;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
     }
 
     public String getEventType() {

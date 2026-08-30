@@ -15,7 +15,8 @@ COPY api-gateway/src ./api-gateway/src
 RUN mvn -q -pl api-gateway -am -DskipTests package
 
 
-FROM eclipse-temurin:21-jre
+#FROM eclipse-temurin:21-jre-alpine
+FROM gcr.io/distroless/java21-debian12:nonroot
 
 WORKDIR /app
 

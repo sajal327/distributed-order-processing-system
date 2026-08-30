@@ -32,10 +32,15 @@ public class InventoryService {
         this.objectMapper = objectMapper;
     }
 
-    @Transactional
-    public void reserveInventory(OrderCreatedEvent event) {
+    @Transactional(
+            rollbackFor = Exception.class
+    )
+    public void reserveInventory(
+            OrderCreatedEvent event
+    ) {
 
-        for (OrderCreatedEvent.Item item : event.payload().items()) {
+        for (OrderCreatedEvent.Item item :
+                event.payload().items()) {
 
             Inventory inventory =
                     inventoryRepository
@@ -44,8 +49,7 @@ public class InventoryService {
                                     new IllegalStateException(
                                             "Inventory not found for product: "
                                                     + item.productId()
-                                    )
-                            );
+                                    ));
 
             inventory.reserve(item.quantity());
 
@@ -112,6 +116,7 @@ public class InventoryService {
                             sourceEvent.eventId(),
                             "ORDER",
                             sourceEvent.orderId(),
+                            sourceEvent.correlationId(),
                             eventType,
                             routingKey,
                             payload
@@ -120,6 +125,7 @@ public class InventoryService {
             outboxRepository.save(outboxEvent);
 
         } catch (JsonProcessingException ex) {
+
             throw new IllegalStateException(
                     "Failed to serialize inventory outbox event",
                     ex
@@ -127,6 +133,139 @@ public class InventoryService {
         }
     }
 }
+
+
+
+
+//package com.example.inventory.service.service;
+//
+//import com.example.inventory.service.config.RabbitMQConfig;
+//import com.example.inventory.service.entity.Inventory;
+//import com.example.inventory.service.entity.InventoryOutboxEvent;
+//import com.example.inventory.service.messaging.InventoryFailedEvent;
+//import com.example.inventory.service.messaging.InventoryReservedEvent;
+//import com.example.inventory.service.messaging.OrderCreatedEvent;
+//import com.example.inventory.service.repository.InventoryOutboxRepository;
+//import com.example.inventory.service.repository.InventoryRepository;
+//import com.fasterxml.jackson.core.JsonProcessingException;
+//import com.fasterxml.jackson.databind.ObjectMapper;
+//import org.springframework.stereotype.Service;
+//import org.springframework.transaction.annotation.Transactional;
+//
+//import java.time.LocalDateTime;
+//
+//@Service
+//public class InventoryService {
+//
+//    private final InventoryRepository inventoryRepository;
+//    private final InventoryOutboxRepository outboxRepository;
+//    private final ObjectMapper objectMapper;
+//
+//    public InventoryService(
+//            InventoryRepository inventoryRepository,
+//            InventoryOutboxRepository outboxRepository,
+//            ObjectMapper objectMapper
+//    ) {
+//        this.inventoryRepository = inventoryRepository;
+//        this.outboxRepository = outboxRepository;
+//        this.objectMapper = objectMapper;
+//    }
+//
+//    @Transactional
+//    public void reserveInventory(OrderCreatedEvent event) {
+//
+//        for (OrderCreatedEvent.Item item : event.payload().items()) {
+//
+//            Inventory inventory =
+//                    inventoryRepository
+//                            .findByProductId(item.productId())
+//                            .orElseThrow(() ->
+//                                    new IllegalStateException(
+//                                            "Inventory not found for product: "
+//                                                    + item.productId()
+//                                    )
+//                            );
+//
+//            inventory.reserve(item.quantity());
+//
+//            inventoryRepository.save(inventory);
+//        }
+//
+//        InventoryReservedEvent reservedEvent =
+//                new InventoryReservedEvent(
+//                        event.eventId(),
+//                        "INVENTORY_RESERVED",
+//                        event.orderId(),
+//                        event.userId(),
+//                        LocalDateTime.now(),
+//                        event.correlationId()
+//                );
+//
+//        saveOutboxEvent(
+//                event,
+//                "INVENTORY_RESERVED",
+//                RabbitMQConfig.INVENTORY_RESERVED_ROUTING_KEY,
+//                reservedEvent
+//        );
+//    }
+//
+//    @Transactional
+//    public void markInventoryFailed(
+//            OrderCreatedEvent event,
+//            String reason
+//    ) {
+//
+//        InventoryFailedEvent failedEvent =
+//                new InventoryFailedEvent(
+//                        event.eventId(),
+//                        "INVENTORY_FAILED",
+//                        event.orderId(),
+//                        event.userId(),
+//                        LocalDateTime.now(),
+//                        event.correlationId(),
+//                        reason
+//                );
+//
+//        saveOutboxEvent(
+//                event,
+//                "INVENTORY_FAILED",
+//                RabbitMQConfig.INVENTORY_FAILED_ROUTING_KEY,
+//                failedEvent
+//        );
+//    }
+//
+//    private void saveOutboxEvent(
+//            OrderCreatedEvent sourceEvent,
+//            String eventType,
+//            String routingKey,
+//            Object event
+//    ) {
+//
+//        try {
+//
+//            String payload =
+//                    objectMapper.writeValueAsString(event);
+//
+//            InventoryOutboxEvent outboxEvent =
+//                    new InventoryOutboxEvent(
+//                            sourceEvent.eventId(),
+//                            "ORDER",
+//                            sourceEvent.orderId(),
+//                            eventType,
+//                            routingKey,
+//                            payload
+//                    );
+//
+//            outboxRepository.save(outboxEvent);
+//
+//        } catch (JsonProcessingException ex) {
+//            throw new IllegalStateException(
+//                    "Failed to serialize inventory outbox event",
+//                    ex
+//            );
+//        }
+//    }
+//}
 
 
 //package com.example.inventory.service.service;

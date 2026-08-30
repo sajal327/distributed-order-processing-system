@@ -15,7 +15,8 @@ COPY notification-service/src ./notification-service/src
 RUN mvn -q -pl notification-service -am -DskipTests package
 
 
-FROM eclipse-temurin:21-jre
+#FROM eclipse-temurin:21-jre-alpine
+FROM gcr.io/distroless/java21-debian12:nonroot
 
 WORKDIR /app
 
