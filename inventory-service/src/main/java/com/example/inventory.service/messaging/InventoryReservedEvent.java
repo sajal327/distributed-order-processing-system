@@ -8,6 +8,7 @@ public record InventoryReservedEvent(
         Long orderId,
         Long userId,
         LocalDateTime timestamp,
-        String correlationId
+        String correlationId,
+        Long causationId
 ) {
 }

@@ -2,11 +2,13 @@ package com.example.inventory.service.service;
 
 import com.example.inventory.service.config.RabbitMQConfig;
 import com.example.inventory.service.entity.Inventory;
+import com.example.inventory.service.entity.InventoryInboxEvent;
 import com.example.inventory.service.entity.InventoryOutboxEvent;
 import com.example.inventory.service.messaging.InventoryFailedEvent;
 import com.example.inventory.service.messaging.InventoryReservedEvent;
 import com.example.inventory.service.messaging.OrderCreatedEvent;
 import com.example.inventory.service.repository.InventoryOutboxRepository;
+import com.example.inventory.service.repository.InventoryInboxRepository;
 import com.example.inventory.service.repository.InventoryRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,15 +22,18 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
     private final InventoryOutboxRepository outboxRepository;
+    private final InventoryInboxRepository inboxRepository;
     private final ObjectMapper objectMapper;
 
     public InventoryService(
             InventoryRepository inventoryRepository,
             InventoryOutboxRepository outboxRepository,
+            InventoryInboxRepository inboxRepository,
             ObjectMapper objectMapper
     ) {
         this.inventoryRepository = inventoryRepository;
         this.outboxRepository = outboxRepository;
+        this.inboxRepository = inboxRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -38,7 +43,9 @@ public class InventoryService {
     public void reserveInventory(
             OrderCreatedEvent event
     ) {
-
+        if (inboxRepository.existsByEventId(event.eventId())) {
+            return;
+        }
         for (OrderCreatedEvent.Item item :
                 event.payload().items()) {
 
@@ -63,7 +70,8 @@ public class InventoryService {
                         event.orderId(),
                         event.userId(),
                         LocalDateTime.now(),
-                        event.correlationId()
+                        event.correlationId(),
+                        event.eventId()
                 );
 
         saveOutboxEvent(
@@ -71,6 +79,105 @@ public class InventoryService {
                 "INVENTORY_RESERVED",
                 RabbitMQConfig.INVENTORY_RESERVED_ROUTING_KEY,
                 reservedEvent
+        );
+        InventoryInboxEvent inboxEvent =
+                new InventoryInboxEvent(
+                        event.eventId(),
+                        event.eventType(),
+                        event.orderId(),
+                        event.correlationId()
+                );
+
+        inboxRepository.save(inboxEvent);
+    }
+
+    @Transactional
+    public void processOrderCreated(OrderCreatedEvent event) {
+
+        if (inboxRepository.existsByEventId(event.eventId())) {
+            return;
+        }
+
+        for (OrderCreatedEvent.Item item : event.payload().items()) {
+
+            Inventory inventory =
+                    inventoryRepository
+                            .findByProductId(item.productId())
+                            .orElseThrow(() ->
+                                    new IllegalStateException(
+                                            "Inventory not found for product: "
+                                                    + item.productId()
+                                    ));
+
+            inventory.reserve(item.quantity());
+
+            inventoryRepository.save(inventory);
+        }
+
+        InventoryReservedEvent reservedEvent =
+                new InventoryReservedEvent(
+                        event.eventId(),
+                        "INVENTORY_RESERVED",
+                        event.orderId(),
+                        event.userId(),
+                        LocalDateTime.now(),
+                        event.correlationId(),
+                        event.eventId()
+                );
+
+        saveOutboxEvent(
+                event,
+                "INVENTORY_RESERVED",
+                RabbitMQConfig.INVENTORY_RESERVED_ROUTING_KEY,
+                reservedEvent
+        );
+
+        inboxRepository.save(
+                new InventoryInboxEvent(
+                        event.eventId(),
+                        event.eventType(),
+                        event.orderId(),
+                        event.correlationId()
+                )
+        );
+    }
+
+    @Transactional
+    public void processOrderCreatedFailure(
+            OrderCreatedEvent event,
+            String reason
+    ) {
+
+        if (inboxRepository.existsByEventId(event.eventId())) {
+            return;
+        }
+
+        InventoryFailedEvent failedEvent =
+                new InventoryFailedEvent(
+                        event.eventId(),
+                        "INVENTORY_FAILED",
+                        event.orderId(),
+                        event.userId(),
+                        LocalDateTime.now(),
+                        event.correlationId(),
+                        event.eventId(),
+                        reason
+                );
+
+        saveOutboxEvent(
+                event,
+                "INVENTORY_FAILED",
+                RabbitMQConfig.INVENTORY_FAILED_ROUTING_KEY,
+                failedEvent
+        );
+
+        inboxRepository.save(
+                new InventoryInboxEvent(
+                        event.eventId(),
+                        event.eventType(),
+                        event.orderId(),
+                        event.correlationId()
+                )
         );
     }
 
@@ -88,6 +195,7 @@ public class InventoryService {
                         event.userId(),
                         LocalDateTime.now(),
                         event.correlationId(),
+                        event.eventId(),
                         reason
                 );
 

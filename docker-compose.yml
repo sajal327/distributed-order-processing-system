@@ -54,7 +54,7 @@ services:
       mysql: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-orders}
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/inventory_db
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-app}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-change-me}
       SPRING_RABBITMQ_HOST: rabbitmq

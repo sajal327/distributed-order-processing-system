@@ -37,7 +37,8 @@ public class InventoryReservationResultListener {
                             orderEvent.orderId(),
                             orderEvent.userId(),
                             LocalDateTime.now(),
-                            orderEvent.correlationId()
+                            orderEvent.correlationId(),
+                            orderEvent.eventId()
                     );
 
             rabbitTemplate.convertAndSend(
@@ -56,6 +57,7 @@ public class InventoryReservationResultListener {
                             orderEvent.userId(),
                             LocalDateTime.now(),
                             orderEvent.correlationId(),
+                            orderEvent.eventId(),
                             result.reason()
                     );
 

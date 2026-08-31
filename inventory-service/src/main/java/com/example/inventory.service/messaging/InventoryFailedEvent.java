@@ -9,6 +9,7 @@ public record InventoryFailedEvent(
         Long userId,
         LocalDateTime timestamp,
         String correlationId,
+        Long causationId,
         String reason
 ) {
 }
