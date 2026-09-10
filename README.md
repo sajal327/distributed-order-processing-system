@@ -12,30 +12,7 @@ The project demonstrates how to build a reliable event-driven backend using **as
 
 The system follows an event-driven microservices architecture.
 
-```mermaid
-flowchart LR
-    Client["Client"] --> Gateway["API Gateway"]
-
-    Gateway --> Order["Order Service"]
-
-    Order --> OrderDB[("Order DB")]
-    Order --> OrderOutbox["Order Outbox"]
-
-    OrderOutbox --> RabbitMQ["RabbitMQ"]
-
-    RabbitMQ --> Inventory["Inventory Service"]
-
-    Inventory --> InventoryDB[("Inventory DB")]
-    Inventory --> InventoryInbox["Inventory Inbox"]
-    Inventory --> InventoryOutbox["Inventory Outbox"]
-
-    InventoryOutbox --> RabbitMQ
-
-    RabbitMQ --> Order
-
-    RabbitMQ --> Payment["Payment Service"]
-    RabbitMQ --> Notification["Notification Service"]
-```
+![Architecture Diagram](./docs/Architecture.png)
 
 ---
 
@@ -863,49 +840,6 @@ distributed-order-processing-system/
 
 ---
 
-# Development Roadmap
-
-The project is being developed incrementally.
-
-### Completed
-
-- [x] Spring Boot microservice foundation
-- [x] Docker Compose infrastructure
-- [x] MySQL integration
-- [x] RabbitMQ integration
-- [x] Order creation
-- [x] Order idempotency
-- [x] Order Outbox
-- [x] Inventory Service
-- [x] Inventory database isolation
-- [x] Inventory Outbox
-- [x] Transactional inventory + outbox
-- [x] Inventory failure rollback
-- [x] Inventory reserved event
-- [x] Inventory failed event
-- [x] Outbox publisher
-- [x] Retry/backoff
-- [x] Inventory Inbox/idempotency
-- [x] Correlation ID propagation
-
-### Next
-
-- [ ] Order Inbox for inventory result events
-- [ ] Order consumer for `inventory.reserved`
-- [ ] Order consumer for `inventory.failed`
-- [ ] Complete Order → Inventory → Order saga loop
-- [ ] Payment Service implementation
-- [ ] Payment Outbox/Inbox
-- [ ] Notification Service implementation
-- [ ] Distributed tracing
-- [ ] Metrics and observability
-- [ ] Dead-letter queues
-- [ ] Integration tests
-- [ ] Concurrency/load testing
-- [ ] Production deployment
-
----
-
 # Production-Grade Goals
 
 The long-term architecture aims for:
@@ -952,32 +886,3 @@ The target characteristics are:
 - **Horizontal scalability**
 
 ---
-
-# Why This Project?
-
-This project is intended to demonstrate practical distributed-systems engineering rather than simply CRUD microservices.
-
-The main engineering problems addressed are:
-
-1. **How do we reliably publish an event after a database transaction?**
-2. **What happens when RabbitMQ is temporarily unavailable?**
-3. **What happens when a message is delivered twice?**
-4. **How do we prevent duplicate business operations?**
-5. **How do we safely update inventory concurrently?**
-6. **How do independent services maintain their own databases?**
-7. **How do we coordinate a multi-service business workflow without a distributed transaction?**
-8. **How do we recover from partial failures?**
-
-The project uses established distributed-systems patterns to answer these questions.
-
----
-
-# License
-
-Add the project's chosen license here, for example:
-
-```text
-MIT License
-```
-
-if you decide to release the repository under MIT.
