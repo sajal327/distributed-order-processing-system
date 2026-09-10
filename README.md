@@ -4,7 +4,7 @@ A production-oriented **distributed order processing system** built with **Sprin
 
 The project demonstrates how to build a reliable event-driven backend using **asynchronous messaging, transactional outbox, inbox/idempotency, optimistic locking, retries, and database-per-service architecture**.
 
-> **Project status:** The Order → Inventory portion is implemented and tested end-to-end. Payment and Notification services are scaffolded for the next stages of the system.
+[//]: # (> **Project status:** The Order → Inventory portion is implemented and tested end-to-end. Payment and Notification services are scaffolded for the next stages of the system.)
 
 ---
 
@@ -806,36 +806,144 @@ event is published to inventory.failed
 # Project Structure
 
 ```text
-distributed-order-processing-system/
-│
-├── api-gateway/
-│
-├── order-service/
-│   ├── src/main/java/
-│   ├── src/main/resources/
-│   │   └── db/migration/
-│   └── Dockerfile
-│
-├── inventory-service/
-│   ├── src/main/java/
-│   │   ├── config/
-│   │   ├── entity/
-│   │   ├── messaging/
-│   │   ├── repository/
-│   │   └── service/
-│   │
-│   ├── src/main/resources/
-│   │   └── db/migration/
-│   │
-│   └── Dockerfile
-│
-├── payment-service/
-│
-├── notification-service/
-│
-├── docker-compose.yml
-├── .env
-└── pom.xml
+Directory structure:
+└── distributed-order-processing-system/
+    ├── README.md
+    ├── docker-compose.yml
+    ├── pom.xml
+    ├── api-gateway/
+    │   ├── Dockerfile
+    │   ├── pom.xml
+    │   └── src/
+    │       └── main/
+    │           ├── java/
+    │           │   └── com/
+    │           │       └── example/
+    │           │           └── api.gateway/
+    │           │               └── Application.java
+    │           └── resources/
+    │               └── application.yml
+    ├── docs/
+    │   └── architecture.md
+    ├── inventory-service/
+    │   ├── Dockerfile
+    │   ├── pom.xml
+    │   └── src/
+    │       └── main/
+    │           ├── java/
+    │           │   └── com/
+    │           │       └── example/
+    │           │           └── inventory.service/
+    │           │               ├── Application.java
+    │           │               ├── config/
+    │           │               │   └── RabbitMQConfig.java
+    │           │               ├── entity/
+    │           │               │   ├── Inventory.java
+    │           │               │   ├── InventoryInboxEvent.java
+    │           │               │   └── InventoryOutboxEvent.java
+    │           │               ├── messaging/
+    │           │               │   ├── InventoryEventListener.java
+    │           │               │   ├── InventoryFailedEvent.java
+    │           │               │   ├── InventoryOutboxPublisher.java
+    │           │               │   ├── InventoryReservationResult.java
+    │           │               │   ├── InventoryReservationResultListener.java
+    │           │               │   ├── InventoryReservedEvent.java
+    │           │               │   └── OrderCreatedEvent.java
+    │           │               ├── repository/
+    │           │               │   ├── InventoryInboxRepository.java
+    │           │               │   ├── InventoryOutboxRepository.java
+    │           │               │   └── InventoryRepository.java
+    │           │               └── service/
+    │           │                   └── InventoryService.java
+    │           └── resources/
+    │               ├── application.yml
+    │               └── db/
+    │                   └── migration/
+    │                       ├── V1__create_inventory.sql
+    │                       ├── V2__create_inventory_outbox.sql
+    │                       ├── V3__seed_inventory.sql
+    │                       └── V4__create_inventory_inbox.sql
+    ├── notification-service/
+    │   ├── Dockerfile
+    │   ├── pom.xml
+    │   └── src/
+    │       └── main/
+    │           ├── java/
+    │           │   └── com/
+    │           │       └── example/
+    │           │           └── notification.service/
+    │           │               └── Application.java
+    │           └── resources/
+    │               └── application.yml
+    ├── order-service/
+    │   ├── Dockerfile
+    │   ├── pom.xml
+    │   └── src/
+    │       └── main/
+    │           ├── java/
+    │           │   └── com/
+    │           │       └── example/
+    │           │           └── order/
+    │           │               └── service/
+    │           │                   ├── Application.java
+    │           │                   ├── config/
+    │           │                   │   └── RabbitMQConfig.java
+    │           │                   ├── controller/
+    │           │                   │   └── OrderController.java
+    │           │                   ├── dto/
+    │           │                   │   ├── CreateOrderRequest.java
+    │           │                   │   ├── OrderItemRequest.java
+    │           │                   │   └── OrderResponse.java
+    │           │                   ├── entity/
+    │           │                   │   ├── Category.java
+    │           │                   │   ├── IdempotencyKey.java
+    │           │                   │   ├── Order.java
+    │           │                   │   ├── OrderItem.java
+    │           │                   │   ├── OutboxEvent.java
+    │           │                   │   ├── Product.java
+    │           │                   │   └── User.java
+    │           │                   ├── messaging/
+    │           │                   │   ├── OrderCreatedEvent.java
+    │           │                   │   └── OutboxPublisher.java
+    │           │                   ├── repository/
+    │           │                   │   ├── CategoryRepository.java
+    │           │                   │   ├── IdempotencyKeyRepository.java
+    │           │                   │   ├── OrderItemRepository.java
+    │           │                   │   ├── OrderRepository.java
+    │           │                   │   ├── OutboxEventRepository.java
+    │           │                   │   ├── ProductRepository.java
+    │           │                   │   └── UserRepository.java
+    │           │                   └── service/
+    │           │                       └── OrderService.java
+    │           └── resources/
+    │               ├── application.yml
+    │               └── db/
+    │                   └── migration/
+    │                       ├── V10__seed_order_data.sql
+    │                       ├── V11__create_inventory_outbox.sql
+    │                       ├── V12__add_correlation_id_to_inventory_outbox.sql
+    │                       ├── V13__remove_legacy_inventory_tables.sql
+    │                       ├── V1__create_users.sql
+    │                       ├── V2__create_categories.sql
+    │                       ├── V3__create_products.sql
+    │                       ├── V4__create_orders.sql
+    │                       ├── V5__create_order_items.sql
+    │                       ├── V6__create_inventory.sql
+    │                       ├── V7__create_payments.sql
+    │                       ├── V8__create_outbox_events.sql
+    │                       └── V9__create_idempotency_keys.sql
+    └── payment-service/
+        ├── Dockerfile
+        ├── pom.xml
+        └── src/
+            └── main/
+                ├── java/
+                │   └── com/
+                │       └── example/
+                │           └── payment.service/
+                │               └── Application.java
+                └── resources/
+                    └── application.yml
 ```
 
 ---
