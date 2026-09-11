@@ -12,7 +12,7 @@ The project demonstrates how to build a reliable event-driven backend using **as
 
 The system follows an event-driven microservices architecture.
 
-![Architecture Diagram](./docs/Architecture.png)
+![Architecture Diagram](docs/System-Architecture.png)
 
 ---
 
