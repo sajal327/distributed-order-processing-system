@@ -80,12 +80,26 @@ services:
 
   notification-service:
     container_name: notification-service
+
     build:
       context: .
       dockerfile: notification-service/Dockerfile
+
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/notification_db
+      SPRING_DATASOURCE_USERNAME: app
+      SPRING_DATASOURCE_PASSWORD: app_password
+
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: app
+      SPRING_RABBITMQ_PASSWORD: rabbit_password
+
     depends_on:
-      mysql: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   api-gateway:
     container_name: api-gateway
