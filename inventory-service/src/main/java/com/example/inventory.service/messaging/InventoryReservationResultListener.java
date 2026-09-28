@@ -36,6 +36,8 @@ public class InventoryReservationResultListener {
                             "INVENTORY_RESERVED",
                             orderEvent.orderId(),
                             orderEvent.userId(),
+                            orderEvent.payload().totalAmount(),
+                            "INR",
                             LocalDateTime.now(),
                             orderEvent.correlationId(),
                             orderEvent.eventId()
