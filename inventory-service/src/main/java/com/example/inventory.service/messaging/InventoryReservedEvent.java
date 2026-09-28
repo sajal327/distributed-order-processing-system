@@ -1,5 +1,6 @@
 package com.example.inventory.service.messaging;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record InventoryReservedEvent(
@@ -7,6 +8,8 @@ public record InventoryReservedEvent(
         String eventType,
         Long orderId,
         Long userId,
+        BigDecimal amount,
+        String currency,
         LocalDateTime timestamp,
         String correlationId,
         Long causationId

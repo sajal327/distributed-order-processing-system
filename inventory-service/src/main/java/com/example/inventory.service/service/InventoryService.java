@@ -69,6 +69,8 @@ public class InventoryService {
                         "INVENTORY_RESERVED",
                         event.orderId(),
                         event.userId(),
+                        event.payload().totalAmount(),
+                        "INR",
                         LocalDateTime.now(),
                         event.correlationId(),
                         event.eventId()
@@ -120,6 +122,8 @@ public class InventoryService {
                         "INVENTORY_RESERVED",
                         event.orderId(),
                         event.userId(),
+                        event.payload().totalAmount(),
+                        "INR",
                         LocalDateTime.now(),
                         event.correlationId(),
                         event.eventId()
