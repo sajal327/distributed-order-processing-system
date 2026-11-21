@@ -92,7 +92,7 @@ PENDING
    ├── Payment successful   ──▶ COMPLETED
    └── Payment unsuccessful ──▶ FAILED
 ```   
-![Architecture Diagram](docs/payment_flow.png)
+![Architecture Diagram](docs/payment.png)
 
 ### 5. Notification Service
 * Owns user notification records and notification delivery workflows in an isolated database.
