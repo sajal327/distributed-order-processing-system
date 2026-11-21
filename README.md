@@ -18,7 +18,7 @@ Clients communicate through a single **API Gateway** entry point while backend s
 
 ## Core Order $\rightarrow$ Inventory Flow
 
-![Architecture Diagram](docs/flow.png)
+![Architecture Diagram](docs/architecture_flow.png)
 
 ```mermaid
 sequenceDiagram
@@ -92,7 +92,7 @@ PENDING
    ├── Payment successful   ──▶ COMPLETED
    └── Payment unsuccessful ──▶ FAILED
 ```   
-![Architecture Diagram](docs/payment.png)
+![Architecture Diagram](docs/payment_flow.png)
 
 ### 5. Notification Service
 * Owns user notification records and notification delivery workflows in an isolated database.
