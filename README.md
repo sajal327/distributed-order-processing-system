@@ -18,6 +18,8 @@ Clients communicate through a single **API Gateway** entry point while backend s
 
 ## Core Order $\rightarrow$ Inventory Flow
 
+![Architecture Diagram](docs/flow.png)
+
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -78,6 +80,38 @@ On reservation:
   available_quantity -= requested_quantity
   reserved_quantity  += requested_quantity
 ```
+
+### 4. Payment Service
+* Owns payment `processing`, `payment records`, and `payment state transitions` in an isolated database.
+* Consumes `inventory.reserved` and `inventory.failed events` from RabbitMQ.
+* Processes payments after successful inventory reservation and `publishes payment.completed` or `payment.failed` events.
+* Uses `payment_inbox` for `idempotent event processing` and `payment_outbox` for reliable event publishing through the transactional outbox pattern.
+
+```text
+PENDING
+   ├── Payment successful   ──▶ COMPLETED
+   └── Payment unsuccessful ──▶ FAILED
+```   
+![Architecture Diagram](docs/payment_flow.png)
+
+### 5. Notification Service
+* Owns user notification records and notification delivery workflows in an isolated database.
+* Consumes payment events such as payment.completed and payment.failed from RabbitMQ.
+* Persists user notifications in the notifications table and prevents duplicate event processing using notification_inbox.
+* Uses notification_outbox to reliably publish notification events through the transactional outbox pattern.
+* Exposes GET /api/notifications to retrieve paginated user notifications.
+* Supports email notifications through SMTP/Gmail and push notifications through Firebase Cloud Messaging (FCM).
+
+```text
+payment.completed
+       │
+       ▼
+Notification Service
+       │
+       ├── Store notification ──▶ notifications
+       ├── Email notification ──▶ SMTP / Gmail
+       └── Push notification  ──▶ Firebase Cloud Messaging
+``` 
 
 ---
 
