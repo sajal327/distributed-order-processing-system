@@ -63,4 +63,12 @@ public class RabbitMQConfig {
                 .to(paymentEventsExchange)
                 .with(PAYMENT_FAILED_ROUTING_KEY);
     }
+    @Bean
+    public DirectExchange notificationEventsExchange() {
+        return new DirectExchange(
+                "notification.events",
+                true,
+                false
+        );
+    }
 }

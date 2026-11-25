@@ -3,6 +3,7 @@ package com.example.payment.service.messaging;
 import com.example.payment.service.config.RabbitMQConfig;
 import com.example.payment.service.domain.PaymentOutboxEvent;
 import com.example.payment.service.repository.PaymentOutboxRepository;
+import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -52,6 +53,10 @@ public class PaymentOutboxPublisher {
                     event.getRoutingKey(),
                     event.getPayload(),
                     message -> {
+
+                        // Explicitly identify the existing payload as JSON
+                        message.getMessageProperties()
+                                .setContentType(MessageProperties.CONTENT_TYPE_JSON);
 
                         message.getMessageProperties()
                                 .setHeader("eventId", event.getEventId());
