@@ -1,335 +1,726 @@
-# Distributed Order Processing System
+# ⚙️ Distributed Order Processing System
 
-**A production-oriented, event-driven order processing platform built with Java 21, Spring Boot 3.5.x, MySQL 8.4, RabbitMQ 4, Flyway, Docker Compose, and an API Gateway.**
+<p align="center">
+  <strong>Event-driven microservices • Reliable messaging • Distributed workflow testing</strong>
+</p>
 
-This project demonstrates how to engineer fault-tolerant distributed workflows using **asynchronous event messaging, the Transactional Outbox pattern, Inbox/idempotent consumers, JPA optimistic locking (`@Version`), retry with backoff, correlation/causation tracking, and database-per-service isolation**.
+<p align="center">
+  <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.5.x-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot">
+  <img src="https://img.shields.io/badge/RabbitMQ-4-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ 4">
+  <img src="https://img.shields.io/badge/MySQL-8.4-4479A1?logo=mysql&logoColor=white" alt="MySQL 8.4">
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose">
+  <img src="https://img.shields.io/badge/Load%20Testing-k6-7D64FF?logo=k6&logoColor=white" alt="k6">
+</p>
 
-> **Implementation Status:** The **Order $\rightarrow$ Inventory** saga flow is implemented and verified end-to-end. **Payment** and **Notification** services are scaffolded for upcoming stages.
+A distributed order-processing application built with **Java 21, Spring Boot, RabbitMQ, MySQL, Flyway, and Docker Compose**. The system separates order management, inventory reservation, payment processing, and notification handling into independently deployable services that communicate asynchronously through RabbitMQ.
+
+The project focuses on practical distributed-systems concerns: **Transactional Outbox, Inbox-based idempotency, optimistic locking, retry with exponential backoff, correlation and causation identifiers, and recovery from broker unavailability**.
+
+> **Implementation and test status:** The Order → Inventory → Payment workflow has been exercised end-to-end. Notification event consumption and notification creation are implemented; downstream notification-event publishing and external email/push delivery are not included in the verified test results.
 
 ---
 
-## Architecture Overview
+## 📌 Contents
 
-Clients communicate through a single **API Gateway** entry point while backend services coordinate asynchronously over **RabbitMQ** exchanges and queues, each owning its isolated database schema.
-
-![Architecture Diagram](docs/System-Architecture.png)
+- [Architecture](#-architecture)
+- [Services](#-services)
+- [Order processing workflow](#-order-processing-workflow)
+- [Reliability patterns](#-reliability-patterns)
+- [Load testing results](#-load-testing-results)
+- [Failure and duplicate-event testing](#-failure-and-duplicate-event-testing)
+- [Testing screenshots](#-testing-screenshots)
+- [Technology stack](#-technology-stack)
+- [Run locally](#-run-locally)
+- [Example API request](#-example-api-request)
+- [Project structure](#-project-structure)
+- [Current scope](#-current-scope)
 
 ---
 
-## Core Order $\rightarrow$ Inventory Flow
+## 🏗️ Architecture
 
-![Architecture Diagram](docs/architecture_flow.png)
+Clients send requests through the API Gateway. The Order Service persists the order and an outbox event in its database transaction. An outbox publisher sends the event to RabbitMQ, where downstream services consume messages and update their own databases.
+
+Each service owns its data store/schema. Services do not directly update another service's tables.
+
+### System architecture
+
+![System architecture](docs/System-Architecture.png)
+
+### Order workflow
+
+![Order processing architecture](docs/architecture_flow.png)
+
+### Asynchronous interaction
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant G as API Gateway
-    participant O as Order Service
-    participant ODB as Order DB
-    participant R as RabbitMQ
-    participant I as Inventory Service
-    participant IDB as Inventory DB
+    autonumber
+    participant Client
+    participant Gateway as API Gateway
+    participant Order as Order Service
+    participant OrderDB as Orders DB
+    participant Broker as RabbitMQ
+    participant Inventory as Inventory Service
+    participant InventoryDB as Inventory DB
+    participant Payment as Payment Service
+    participant PaymentDB as Payment DB
 
-    C->>G: POST /api/orders (Idempotency-Key)
-    G->>O: Create Order
-
-    O->>ODB: Save Order & Outbox Event
-    O-->>G: PENDING Order
-    G-->>C: Order Response
-
-    ODB-->>O: Outbox Publisher
-    O->>R: Publish order.created
-
-    R->>I: Consume OrderCreated
-    I->>IDB: Check Inbox (eventId)
-
-    alt Duplicate Event
-        I-->>R: Ack & Ignore Duplicate
-    else New Event
-        I->>IDB: Begin TX -> Reserve Stock -> Insert Outbox & Inbox -> Commit
-        I->>R: Publish inventory.reserved / inventory.failed
-    end
-
-    R->>O: Consume Inventory Result & Update Order State
+    Client->>Gateway: POST /api/orders
+    Gateway->>Order: Create order
+    Order->>OrderDB: Save order + outbox event
+    Order-->>Client: 201 Created / PENDING
+    OrderDB-->>Order: Scheduled outbox publisher
+    Order->>Broker: order.created
+    Broker->>Inventory: Deliver order event
+    Inventory->>InventoryDB: Check inbox + reserve stock
+    Inventory->>InventoryDB: Save inbox + outbox
+    Inventory->>Broker: inventory.reserved / inventory.failed
+    Broker->>Payment: Deliver inventory result
+    Payment->>PaymentDB: Process payment + persist outbox
+    Payment->>Broker: payment.completed / payment.failed
+    Broker->>Order: Deliver payment result
+    Order->>OrderDB: Deduplicate + update order state
 ```
 
 ---
 
-## Services & State Ownership
+## 🧩 Services
 
-### 1. API Gateway (`api-gateway`)
-* Serves as the external entry point for client requests.
-* Routes traffic to downstream microservices while keeping internal service endpoints isolated.
+| Service | Responsibility | Database |
+|---|---|---|
+| **API Gateway** | Single external entry point; routes client requests to backend services | — |
+| **Order Service** | Order creation, request idempotency, order state transitions, outbox publishing, payment-result consumption | `orders` |
+| **Inventory Service** | Stock reservation, inventory concurrency control, inbox deduplication, reservation-result publishing | `inventory_db` |
+| **Payment Service** | Payment processing after inventory reservation, payment state management, inbox/outbox event handling | `payment_db` |
+| **Notification Service** | Consumes payment events and creates notification records | `notification_db` |
 
-### 2. Order Service
-* Owns order creation, validation, idempotency keys (`Idempotency-Key` header), and order state transitions.
-* Persists orders and outbox records atomically, publishes `order.created` events, and consumes inventory results.
+### Order states
+
+The workflow uses explicit state transitions. The initial order state is `PENDING`; successful payment completion transitions it to `CONFIRMED`. Inventory or payment failure paths are represented separately.
 
 ```text
 PENDING
-   ├── inventory.reserved ──▶ RESERVED
-   └── inventory.failed   ──▶ INVENTORY_FAILED
+  ├── Inventory failure ──> INVENTORY_FAILED
+  ├── Payment failure   ──> PAYMENT_FAILED
+  └── Payment completed ──> CONFIRMED
 ```
 
-### 3. Inventory Service
-* Owns inventory state (`available_quantity`, `reserved_quantity`, `version`) in an isolated database.
-* Enforces **optimistic locking** via `@Version`, prevents duplicate event processing via `inventory_inbox`, and publishes `inventory.reserved` or `inventory.failed` via `inventory_outbox`.
+---
 
-```text
-On reservation:
-  available_quantity -= requested_quantity
-  reserved_quantity  += requested_quantity
-```
+## 🔄 Order processing workflow
 
-### 4. Payment Service
-* Owns payment `processing`, `payment records`, and `payment state transitions` in an isolated database.
-* Consumes `inventory.reserved` and `inventory.failed events` from RabbitMQ.
-* Processes payments after successful inventory reservation and `publishes payment.completed` or `payment.failed` events.
-* Uses `payment_inbox` for `idempotent event processing` and `payment_outbox` for reliable event publishing through the transactional outbox pattern.
+1. The client submits an order through `POST /api/orders`.
+2. The Order Service stores the order and its `order.created` outbox event in a local database transaction.
+3. The scheduled outbox publisher sends the event to RabbitMQ.
+4. The Inventory Service checks its inbox to detect previously processed event IDs.
+5. For a new event, the Inventory Service reserves stock using a transaction and writes the corresponding inbox and outbox records.
+6. The Payment Service consumes the inventory result and processes the payment.
+7. The Order Service consumes `payment.completed` or `payment.failed`, checks its inbox, and updates the order state.
+8. The Notification Service consumes payment events and creates notification records.
 
-```text
-PENDING
-   ├── Payment successful   ──▶ COMPLETED
-   └── Payment unsuccessful ──▶ FAILED
-```   
-![Architecture Diagram](docs/payment_flow.png)
+### RabbitMQ message flow
 
-### 5. Notification Service
-* Owns user notification records and notification delivery workflows in an isolated database.
-* Consumes payment events such as payment.completed and payment.failed from RabbitMQ.
-* Persists user notifications in the notifications table and prevents duplicate event processing using notification_inbox.
-* Uses notification_outbox to reliably publish notification events through the transactional outbox pattern.
-* Exposes GET /api/notifications to retrieve paginated user notifications.
-* Supports email notifications through SMTP/Gmail and push notifications through Firebase Cloud Messaging (FCM).
+| Producer | Exchange / routing key | Consumer queue | Purpose |
+|---|---|---|---|
+| Order Service | `order.events` / `order.created` | `inventory.orders` | New order notification to Inventory |
+| Inventory Service | Inventory result event | `payment.inventory.results` | Reservation result for Payment |
+| Payment Service | `payment.events` / `payment.completed` | `order.payment.results` | Successful payment result for Order |
+| Payment Service | `payment.events` / `payment.failed` | `order.payment.results` | Failed payment result for Order |
+| Payment Service | Payment event routing | `notification.payment.events` | Payment event for Notification |
 
-```text
-payment.completed
-       │
-       ▼
-Notification Service
-       │
-       ├── Store notification ──▶ notifications
-       ├── Email notification ──▶ SMTP / Gmail
-       └── Push notification  ──▶ Firebase Cloud Messaging
-``` 
+The queue names and routing keys above describe the configured workflow. Check the service `RabbitMQConfig` classes for the authoritative exchange and binding definitions.
 
 ---
 
-## Event-Driven Messaging (RabbitMQ)
+## 🛡️ Reliability patterns
 
-| Component | Name / Binding | Purpose |
-| :--- | :--- | :--- |
-| **Order Exchange** | `order.events` (`order.created`) | Publishes newly created order events |
-| **Inventory Exchange** | `inventory.events` (`inventory.reserved`, `inventory.failed`) | Publishes reservation outcomes |
-| **Inventory Queue** | `inventory.orders` $\leftarrow$ `order.events` (`order.created`) | Buffers incoming order events for Inventory Service |
+### Transactional Outbox
 
----
+Business data and the corresponding outbox record are persisted in the same local database transaction. A scheduled publisher subsequently sends pending events to RabbitMQ.
 
-## Reliability & Distributed Systems Patterns
+This avoids relying on a database update and broker publish being one distributed transaction.
 
-### Transactional Outbox & Atomic Inventory Transactions
-Updating business state and publishing to RabbitMQ are not performed as a single distributed commit. Instead, business mutations and outbox inserts commit in the same local database transaction, and an asynchronous publisher pushes `PENDING` events to RabbitMQ.
+### Inbox-based idempotency
 
-* **Successful Reservation:** `Inventory UPDATE` + `Inventory Outbox INSERT` + `Inbox INSERT` in one transaction.
-* **Insufficient Stock:** Reservation transaction rolls back so stock is untouched, followed by a new transaction recording `INVENTORY_FAILED` in the outbox and recording the event in the inbox.
+Consumers persist processed event IDs in an inbox table in the same transaction as their business update. When the same event is delivered again, the consumer can detect it and skip the repeated business operation.
 
-### Outbox Publisher, Retries & Inbox Idempotency
-* **Publisher Defaults:** Batch size `20`, max attempts `5`, polling interval `3s`, providing **at-least-once delivery**.
-* **Retry Tracking:** Tracks `attempts`, `next_attempt_at`, `last_error`, `status` (`PENDING`, `PUBLISHED`, `FAILED`), and `published_at` with backoff before marking exhausted items as `FAILED`.
-* **Inbox Deduplication (`inventory_inbox`):** Records processed event IDs inside the same transaction as business updates so redelivered messages are safely ignored.
+Verified duplicate replay: the same `PAYMENT_COMPLETED` event (`eventId=195`) was published again to `payment.events`. RabbitMQ routed it, the Order Service queue had an active consumer and no pending/unacknowledged messages, and the database retained one inbox record with the order still `CONFIRMED` at version `1`.
 
-### Optimistic Locking & Workflow Tracing
-* **Optimistic Locking (`@Version`):** Prevents concurrent updates on the same inventory row from overwriting each other; conflicting transactions retry or fail cleanly.
-* **Correlation & Causation IDs:** Events carry `eventId` (individual event), `correlationId` (end-to-end business workflow), and `causationId` (parent event that triggered the current event).
+### Optimistic locking
 
----
+JPA `@Version` fields are used to detect conflicting concurrent updates. Inventory reservation updates the inventory version as stock is reserved.
 
-## Database-per-Service & Flyway Migrations
+### Retry and backoff
 
-```mermaid
-flowchart TB
-    Order["Order Service"] --> OrderDB[("order_db")]
-    Inventory["Inventory Service"] --> InventoryDB[("inventory_db")]
-    Payment["Payment Service"] --> PaymentDB[("payment_db")]
-    Notification["Notification Service"] --> NotificationDB[("notification_db")]
+Outbox publishers track attempts and retry scheduling metadata such as `next_attempt_at` and `last_error`. Retry delays use backoff rather than continuously retrying failed publishes.
 
-    OrderDB --> OrderTables["orders, order_items, products, users,\noutbox_events, idempotency_keys"]
-    InventoryDB --> InventoryTables["inventory, inventory_outbox,\ninventory_inbox, flyway_schema_history"]
-```
+> **Delivery semantics:** Outbox publishing and consumer idempotency are designed to tolerate message redelivery. This README does not claim exactly-once delivery. End-to-end delivery guarantees depend on broker durability, message persistence, publisher confirms, and consumer acknowledgement configuration.
 
-* Schema changes are versioned with **Flyway** SQL migrations (e.g., `V1__create_inventory.sql` through `V4__create_inventory_inbox.sql` in `inventory-service`).
-* Hibernate runs with `spring.jpa.hibernate.ddl-auto: validate` so Flyway remains the single source of truth for schema evolution.
+### Correlation and causation
+
+Events carry identifiers used to trace a business workflow:
+
+- `eventId` — identifies an individual event.
+- `correlationId` — links events belonging to the same workflow.
+- `causationId` — identifies the event that caused the current event.
 
 ---
 
-## Local Development with Docker Compose
+## 📈 Load testing results
 
-Services included in the stack: **MySQL 8.4**, **RabbitMQ 4**, **Order Service**, **Inventory Service**, **Payment Service**, **Notification Service**, and **API Gateway**.
+The order-creation endpoint was tested with **k6** using three separate runs. Each run used a different number of virtual users and iteration count.
+
+### Test summary
+
+| Test run | Concurrent VUs | Orders submitted | HTTP success | Eventual order/payment completion | HTTP throughput |
+|---|---:|---:|---:|---:|---:|
+| Run 1 | 5 | 100 | 100% | 100% | 16.75 req/s |
+| Run 2 | 10 | 50 | 100% | 100% | 21.86 req/s |
+| Run 3 | 20 | 40 | 100% | 100% | 41.73 req/s |
+| **Total** | **5–20** | **190** | **100%** | **100%** | — |
+
+### Observed HTTP request latency
+
+| Test run | Average | Median | p95 |
+|---|---:|---:|---:|
+| 5 VUs / 100 orders | 93.07 ms | 46.04 ms | 215.16 ms |
+| 10 VUs / 50 orders | 249.19 ms | 58.02 ms | 1,030 ms |
+| 20 VUs / 40 orders | 255.73 ms | 256.02 ms | 468.70 ms |
+
+**Important measurement note:** These latency values are k6 HTTP request durations for order creation. They are not end-to-end asynchronous event-processing latency. The test runs also used different iteration counts, so the results should be treated as observations from separate test runs—not as a controlled benchmark proving that latency improves with concurrency.
+
+### End-to-end verification
+
+After each run, database state was checked to confirm that submitted orders progressed beyond the initial `PENDING` state and that the corresponding payments succeeded. Across the three runs:
+
+- **190** orders submitted.
+- **190** orders eventually confirmed.
+- **190** successful payment records.
+- **100%** HTTP request success in the recorded runs.
+- **100%** eventual order/payment completion in the recorded runs.
+
+---
+
+## 🧪 Failure and duplicate-event testing
+
+### 1. RabbitMQ outage and recovery
+
+A broker outage was simulated by stopping RabbitMQ, then creating an order while the broker was unavailable.
+
+After RabbitMQ was restarted, the workflow recovered: the test order eventually reached `CONFIRMED`, its payment reached `SUCCEEDED`, and inventory reservation was reflected in the inventory database.
+
+This validates recovery of the tested business workflow after broker unavailability. It is not a claim that every failure mode or every service restart scenario has been exhaustively tested.
+
+### 2. Duplicate payment-event replay
+
+The original `PAYMENT_COMPLETED` message for order `195` was republished with the same event ID and payload.
+
+Observed results:
+
+| Verification | Result |
+|---|---:|
+| RabbitMQ publish result | Published and routed |
+| Order payment queue consumers | 1 |
+| Messages ready | 0 |
+| Messages unacknowledged | 0 |
+| Inbox records for event `195` | 1 |
+| Order state | `CONFIRMED` |
+| Order version | `1` |
+| Payment state | `SUCCEEDED` |
+
+The replay was consumed without a second inbox record or another order-state transition.
+
+### 3. Inventory consistency
+
+Inventory quantity and version fields were inspected after load and recovery tests. For the 20-VU run, product `3` showed `7` available units, `193` reserved units, and version `193`, consistent with the 193 successful reservations recorded at that checkpoint.
+
+---
+
+## 🖼️ Testing screenshots
+
+The screenshots below are included in [`docs/testing/`](docs/testing/). They provide supporting evidence for the k6 runs, database verification, RabbitMQ queue state, and duplicate-event replay.
+
+### k6 load-test runs
+
+**10-VU run output**
+
+![k6 10 VU test output](docs/testing/k6-10-vus-output.png)
+
+**10-VU latency and throughput metrics**
+
+![k6 10 VU metrics](docs/testing/k6-10-vus-metrics.png)
+
+**Comparison of all three load-test runs**
+
+![Load test comparison](docs/testing/load-test-comparison.png)
+
+**Observed HTTP throughput**
+
+![Observed throughput chart](docs/testing/load-test-throughput.png)
+
+### Database and workflow verification
+
+**Inventory, outbox, and inbox records**
+
+![Inventory and event records](docs/testing/database-outbox-inbox.png)
+
+**Order, payment, and inventory state after load testing**
+
+![Database state after load test](docs/testing/database-load-test-state.png)
+
+**100-order end-to-end verification**
+
+![100 order end-to-end verification](docs/testing/end-to-end-100-orders.png)
+
+### RabbitMQ and duplicate-event verification
+
+**RabbitMQ Management UI queue state**
+
+![RabbitMQ queue state](docs/testing/rabbitmq-queues.png)
+
+**Duplicate-event replay and idempotency verification**
+
+![Duplicate event verification](docs/testing/duplicate-event-verification.png)
+
+**Service logs during workflow processing**
+
+![Service logs](docs/testing/service-logs.png)
+
+---
+
+## 🧰 Technology stack
+
+| Area | Technologies |
+|---|---|
+| Language | Java 21 |
+| Framework | Spring Boot 3.5.x, Spring Data JPA, Hibernate, Spring AMQP |
+| API routing | Spring Cloud Gateway / API Gateway |
+| Messaging | RabbitMQ 4 |
+| Databases | MySQL 8.4 |
+| Database migrations | Flyway |
+| Concurrency | JPA optimistic locking (`@Version`) |
+| Reliability | Transactional Outbox, Inbox idempotency, retry/backoff |
+| Testing | k6, SQL verification, RabbitMQ Management UI |
+| Containers | Docker, Docker Compose |
+| Build | Maven |
+
+---
+
+## 🚀 Run locally
+
+### Prerequisites
+
+- Java 21
+- Docker Desktop / Docker Engine with Docker Compose
+- Maven (if building outside Docker)
+- k6 (only if running load tests)
+
+### Start the application
 
 ```bash
-# Start all containers
+# Clone the repository
+git clone https://github.com/sajal327/distributed-order-processing-system
+cd distributed-order-processing-system
+
+# Configure local environment variables in .env
+
+# Build and start the services
 docker compose up -d --build
 
-# Verify container health/status
+# Check container status
 docker compose ps
 
-# Stream Inventory Service logs
+# Follow service logs
+docker compose logs -f order-service
 docker compose logs -f inventory-service
+docker compose logs -f payment-service
+docker compose logs -f notification-service
+docker compose logs -f api-gateway
+
+# Follow all application logs
+docker compose logs -f
 ```
 
-* **RabbitMQ Management UI:** `http://localhost:15672` (AMQP port `5672`, UI port `15672`)
-* **MySQL:** Port `3306`
+### Local service endpoints
 
-> **Security Note:** Never commit production secrets or real credentials to Git. Configure database and broker credentials via environment variables or a secrets manager.
+| Component | Address |
+|---|---|
+| API Gateway | `http://localhost:8080` |
+| RabbitMQ Management UI | `http://localhost:15672` |
+| RabbitMQ AMQP | `localhost:5672` |
+| MySQL | `localhost:3306` |
 
----
+### Stop the application
 
-## Technology Stack
-
-| Category | Technologies |
-| :--- | :--- |
-| **Language & Framework** | Java 21, Spring Boot 3.5.x, Spring Data JPA, Hibernate, Spring AMQP |
-| **Messaging & Data** | RabbitMQ 4, MySQL 8.4, Flyway |
-| **Packaging & Build** | Docker, Docker Compose, Maven, API Gateway |
-
----
-
-## Failure Scenarios Handled
-
-1. **DB Commit Succeeds, RabbitMQ Publish Fails:** Outbox row stays `PENDING`; publisher retries on subsequent cycles.
-2. **RabbitMQ Publish Succeeds, DB Status Update Fails:** Event may be republished; consumer checks `inventory_inbox` and skips duplicate work.
-3. **Duplicate Event Delivery:** Second delivery of the same `eventId` is detected in `inventory_inbox` and ignored.
-4. **Insufficient Stock:** Stock update rolls back; `inventory.failed` event is emitted via outbox.
-
----
-
-## Testing the Order $\rightarrow$ Inventory Flow
-
-### 1. Successful Reservation
 ```bash
-curl -X POST http://localhost:8080/api/orders \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: inventory-test-success-001" \
-  -d '{
-    "userId": 2,
+docker compose down
+```
+
+This stops and removes the containers and network while preserving named volumes. Do not add `-v` unless you intentionally want to delete persisted local database and broker data.
+
+---
+
+## Check MySQL databases and tables
+Open a MySQL shell inside the container:
+```bash
+docker compose exec mysql mysql -uapp -papp_password
+```
+List databases:
+```bash
+SHOW DATABASES;
+```
+
+List tables in each database:
+```bash
+USE orders;
+SHOW TABLES;
+
+USE inventory_db;
+SHOW TABLES;
+
+USE payment_db;
+SHOW TABLES;
+
+USE notification_db;
+SHOW TABLES;
+```
+
+Exit:
+```bash
+EXIT;
+```
+
+## 📬 Create a new Order 
+First, check product 3's available stock:
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT product_id, available_quantity, reserved_quantity, version
+FROM inventory_db.inventory
+WHERE product_id = 3;
+"
+```
+
+The following example creates an order through the API Gateway. Use a valid user and product ID from your local seed data.
+
+```bash
+curl --request POST 'http://localhost:8080/api/orders' \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: demo-order-001' \
+  --data '{
+    "userId": 1,
     "items": [
       {
-        "productId": 4,
-        "quantity": 5
+        "productId": 3,
+        "quantity": 1
       }
     ]
   }'
 ```
-Expected result: `available_quantity` decreases, `reserved_quantity` increases, `version` increments, and `INVENTORY_RESERVED` is published to `inventory.events`.
 
-### 2. Insufficient Inventory
-```bash
-curl -X POST http://localhost:8080/api/orders \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: inventory-test-failure-001" \
-  -d '{
-    "userId": 2,
-    "items": [
-      {
-        "productId": 5,
-        "quantity": 100
-      }
-    ]
-  }'
+Expected initial response: HTTP 201 Created, with an order ID and initial status PENDING.
+
+Save the returned orderId. For the examples below, I'll use:
 ```
-Expected result: Inventory quantities remain unchanged, and `INVENTORY_FAILED` is published to `inventory.events`.
+ORDER_ID=196
+```
+---
+### Verify the Order Service database
+Check the order
 
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT id, user_id, status, version, created_at
+FROM orders.orders
+WHERE id = 196;
+"
+```
+
+Check order items
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT *
+FROM orders.order_items
+WHERE order_id = 196;
+"
+```
+
+Check the Order Outbox
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT
+id,
+aggregate_id,
+event_type,
+status,
+attempts,
+next_attempt_at,
+published_at,
+last_error
+FROM orders.outbox_events
+WHERE aggregate_id = 196
+ORDER BY id;
+"
+```
+
+Check the Order Inbox
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT *
+FROM orders.order_inbox
+WHERE aggregate_id = 196
+ORDER BY id;
+"
+```
 ---
 
-## Project Structure
+### Verify RabbitMQ exchanges, queues and consumers
+List exchanges
+```bash
+docker compose exec rabbitmq rabbitmqctl list_exchanges name type durable
+```
+
+List queues
+```bash
+docker compose exec rabbitmq rabbitmqctl list_queues \
+name messages_ready messages_unacknowledged consumers
+```
+
+Check queue bindings
+```bash
+docker compose exec rabbitmq rabbitmqctl list_bindings \
+source_name destination_name destination_kind routing_key
+```
+
+Check RabbitMQ connections
+```bash
+docker compose exec rabbitmq rabbitmqctl list_connections \
+user peer_host peer_port state
+```
+
+Check consumers
+```bash
+docker compose exec rabbitmq rabbitmqctl list_consumers
+```
+
+Monitor queues continuously
+```bash
+watch -n 2 'docker compose exec -T rabbitmq rabbitmqctl list_queues name messages_ready messages_unacknowledged consumers'
+```
+
+Press Ctrl+C to stop monitoring.
+
+### Verify Inventory Service
+
+Check available and reserved inventory
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT
+product_id,
+available_quantity,
+reserved_quantity,
+version
+FROM inventory_db.inventory
+WHERE product_id = 3;
+"
+```
+
+### Verify Payment Service
+
+Check payment status
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT order_id, status
+FROM payment_db.payments
+WHERE order_id = 196;
+"
+```
+
+### Verify Notification Service
+
+Check its available tables:
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SHOW TABLES FROM notification_db;
+"
+```
+
+Inspect the notification table structure:
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+DESCRIBE notification_db.notifications;
+"
+```
+
+Then inspect the latest notification records:
+```bash
+docker compose exec mysql mysql -uapp -papp_password -e "
+SELECT *
+FROM notification_db.notifications
+ORDER BY id DESC
+LIMIT 10;
+"
+```
+
+
+## 📁 Project structure
+
+The repository is organized as a Maven multi-module project. Each backend service has its own `src/main` source tree, application configuration, Flyway migrations (where applicable), Dockerfile, and Maven module definition. The `k6/` directory contains the load and failure-test scripts.
 
 ```text
 distributed-order-processing-system/
-├── README.md
+├── .github/
+├── api-gateway/
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── com/example/api/gateway/
+│   │       │       └── Application.java
+│   │       └── resources/
+│   │           └── application.yml
+│   ├── Dockerfile
+│   └── pom.xml
+├── docs/
+│   ├── System-Architecture.png
+│   ├── architecture_flow.png
+│   ├── payment_flow.png
+│   └── testing/
+│       ├── k6-10-vus-output.png
+│       ├── k6-10-vus-metrics.png
+│       ├── load-test-comparison.png
+│       ├── load-test-throughput.png
+│       ├── database-outbox-inbox.png
+│       ├── database-load-test-state.png
+│       ├── end-to-end-100-orders.png
+│       ├── rabbitmq-queues.png
+│       ├── duplicate-event-verification.png
+│       └── service-logs.png
+├── inventory-service/
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── com/example/inventory/service/
+│   │       │       ├── config/
+│   │       │       ├── entity/
+│   │       │       ├── messaging/
+│   │       │       ├── repository/
+│   │       │       ├── service/
+│   │       │       └── Application.java
+│   │       └── resources/
+│   │           ├── db/migration/
+│   │           └── application.yml
+│   ├── Dockerfile
+│   └── pom.xml
+├── k6/
+│   ├── order-load-test.js
+│   ├── order-load-test-10vus.js
+│   ├── order-load-test-20vus.js
+│   └── order-rabbitmq-outage.js
+├── notification-service/
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── com/example/notification/service/
+│   │       │       ├── config/
+│   │       │       ├── controller/
+│   │       │       ├── domain/
+│   │       │       ├── listener/
+│   │       │       ├── messaging/
+│   │       │       ├── repository/
+│   │       │       ├── service/
+│   │       │       └── Application.java
+│   │       └── resources/
+│   │           ├── db/migration/
+│   │           └── application.yml
+│   ├── Dockerfile
+│   └── pom.xml
+├── order-service/
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── com/example/order/service/
+│   │       │       ├── config/
+│   │       │       ├── controller/
+│   │       │       ├── dto/
+│   │       │       ├── entity/
+│   │       │       ├── messaging/
+│   │       │       ├── repository/
+│   │       │       ├── service/
+│   │       │       └── Application.java
+│   │       └── resources/
+│   │           ├── db/migration/
+│   │           └── application.yml
+│   ├── Dockerfile
+│   └── pom.xml
+├── payment-service/
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/
+│   │       │   └── com/example/payment/service/
+│   │       │       ├── config/
+│   │       │       ├── domain/
+│   │       │       ├── listener/
+│   │       │       ├── messaging/
+│   │       │       ├── repository/
+│   │       │       ├── service/
+│   │       │       └── Application.java
+│   │       └── resources/
+│   │           ├── db/migration/
+│   │           └── application.yml
+│   ├── Dockerfile
+│   └── pom.xml
+├── .env
+├── .gitignore
 ├── docker-compose.yml
 ├── pom.xml
-├── api-gateway/
-│   ├── Dockerfile
-│   ├── pom.xml
-│   └── src/main/
-│       ├── java/com/example/api.gateway/Application.java
-│       └── resources/application.yml
-├── docs/
-│   └── architecture.md
-├── inventory-service/
-│   ├── Dockerfile
-│   ├── pom.xml
-│   └── src/main/
-│       ├── java/com/example/inventory.service/
-│       │   ├── Application.java
-│       │   ├── config/RabbitMQConfig.java
-│       │   ├── entity/{Inventory,InventoryInboxEvent,InventoryOutboxEvent}.java
-│       │   ├── messaging/{InventoryEventListener,InventoryFailedEvent,InventoryOutboxPublisher,InventoryReservationResult,InventoryReservationResultListener,InventoryReservedEvent,OrderCreatedEvent}.java
-│       │   ├── repository/{InventoryInboxRepository,InventoryOutboxRepository,InventoryRepository}.java
-│       │   └── service/InventoryService.java
-│       └── resources/
-│           ├── application.yml
-│           └── db/migration/V{1..4}__*.sql
-├── notification-service/
-│   ├── Dockerfile
-│   ├── pom.xml
-│   └── src/main/
-│       ├── java/com/example/notification.service/Application.java
-│       └── resources/application.yml
-├── order-service/
-│   ├── Dockerfile
-│   ├── pom.xml
-│   └── src/main/
-│       ├── java/com/example/order/service/
-│       │   ├── Application.java
-│       │   ├── config/RabbitMQConfig.java
-│       │   ├── controller/OrderController.java
-│       │   ├── dto/{CreateOrderRequest,OrderItemRequest,OrderResponse}.java
-│       │   ├── entity/{Category,IdempotencyKey,Order,OrderItem,OutboxEvent,Product,User}.java
-│       │   ├── messaging/{OrderCreatedEvent,OutboxPublisher}.java
-│       │   ├── repository/{CategoryRepository,IdempotencyKeyRepository,OrderItemRepository,OrderRepository,OutboxEventRepository,ProductRepository,UserRepository}.java
-│       │   └── service/OrderService.java
-│       └── resources/
-│           ├── application.yml
-│           └── db/migration/V{1..13}__*.sql
-└── payment-service/
-    ├── Dockerfile
-    ├── pom.xml
-    └── src/main/
-        ├── java/com/example/payment.service/Application.java
-        └── resources/application.yml
+└── README.md
 ```
+
+### Module responsibilities
+
+| Directory | Purpose |
+|---|---|
+| `.github/` | Repository-level GitHub configuration and workflows |
+| `api-gateway/` | External API entry point and request routing |
+| `order-service/` | Order creation, order state management, and order event handling |
+| `inventory-service/` | Inventory reservation, concurrency control, and inventory events |
+| `payment-service/` | Payment processing and payment event handling |
+| `notification-service/` | Notification persistence and payment-event consumption |
+| `k6/` | k6 scripts for load testing and RabbitMQ outage testing |
+| `docs/` | Architecture diagrams and testing evidence |
+| Root `pom.xml` | Parent Maven project and shared module/dependency configuration |
+| `docker-compose.yml` | Local multi-container environment |
+| `.env` | Local environment configuration |
+
+> **Repository hygiene:** `.env` is shown because it exists in the local project structure. Keep it in `.gitignore` and never commit real credentials. Generated `target/` directories and IDE-specific `.idea/` files are intentionally omitted from this source-oriented tree.
 
 ---
 
-## Production-Grade Target Architecture
+## 🎯 Current scope and next steps
 
-```text
-                ┌──────────────────────┐
-                │      API Gateway     │
-                └──────────┬───────────┘
-                           │
-             ┌─────────────┴─────────────┐
-             │                           │
-        Order Service              Other Services
-             │                           │
-         order_db                  service_db
-             │                           │
-          Outbox                         │
-             │                           │
-             └──────────┬────────────────┘
-                        │
-                    RabbitMQ
-                        │
-          ┌─────────────┼─────────────┐
-          │             │             │
-       Inventory     Payment     Notification
-          │             │             │
-      inventory_db   payment_db   notification_db
-          │
-        Inbox
-          │
-        Outbox
-```
+### Verified in the current test cycle
 
-Target capabilities: **at-least-once event delivery**, **idempotent consumers**, **atomic local transactions**, **no cross-service database transactions**, **database-per-service ownership**, **retryable asynchronous processing**, **observable event flows**, **failure isolation**, **saga-based workflows**, and **horizontal scalability**.
+- [x] Order creation through the API Gateway
+- [x] Asynchronous Order → Inventory → Payment workflow
+- [x] Inventory reservation and optimistic-locking version updates
+- [x] Transactional outbox publishing and inbox-based deduplication paths
+- [x] k6 load testing across 5, 10, and 20 VUs
+- [x] End-to-end order and payment state verification for 190 test orders
+- [x] Tested recovery after RabbitMQ became unavailable
+- [x] Replayed a duplicate payment event and verified unchanged order state
+
+### Further validation / enhancements
+
+- [ ] Add dedicated consumer retry and dead-letter queue (DLQ) tests.
+- [ ] Verify publisher confirms and persistent-message configuration before making stronger delivery-guarantee claims.
+- [ ] Add controlled end-to-end event latency instrumentation.
+- [ ] Complete and test downstream notification-event publishing.
+- [ ] Add automated integration tests for service restart and database failure scenarios.
+- [ ] Add centralized metrics, tracing, and dashboards.
+
+---
+
+<p align="center">
+  <strong>Built to explore reliable asynchronous communication and practical distributed-systems engineering.</strong>
+</p>
